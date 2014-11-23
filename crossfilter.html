@@ -1,0 +1,103 @@
+{% macro require_js() -%}
+console.log("start");
+require.config({paths: {{require_urls}} });
+console.log("setting");
+
+require(["d3", "crossfilter", "dc"], function(d3, ignore, dc) {
+    console.log(d3);
+    console.log(crossfilter);
+    console.log(dc);
+    {{ caller() }}
+});
+{%- endmacro %}
+
+{% macro render_charts() -%}
+    var ndx = crossfilter(df);
+    var all = ndx.groupAll();
+
+
+    {% for i, col in filter.itercolumns() %}
+    var chart_{{i}}  = dc.{{filter.col_chart(i)}}("#chart-{{i}}-{{filter.timestamp}}");
+    {% endfor %}
+
+    dim_index = ndx.dimension(function(d){return d["_I"];});
+    {% for i, col in filter.itercolumns() %}
+    var dim_col{{i}} = ndx.dimension(function(d){return {{filter.dimension(i)}};});
+    var grp_col{{i}} = dim_col{{i}}.group().reduceCount();
+    {% endfor %}
+
+    {% for i, col in filter.itercolumns() %}
+          chart_{{i}}
+            .width({{filter.col_width(i)}}).height({{filter.col_height(i)}})
+            .dimension(dim_col{{i}})
+            .group(grp_col{{i}});
+
+          {% if filter.col_chart(i) == "barChart" %}
+            chart_{{i}}.xUnits(function(){return {{filter.col_bin_count(i) + 2}};})
+            .centerBar(true)
+            .x(d3.scale.linear().domain([{{filter.col_min(i) - filter.col_scale(i)}}, {{filter.col_max(i) + filter.col_scale(i)}}]))
+            .elasticY(true);
+          {% endif %}
+
+          {% if filter.col_chart(i) in ("barChart", "rowChart") %}
+            chart_{{i}}.xAxis().ticks(5);
+            chart_{{i}}.xAxis().tickFormat(function(d) {return d.toFixed(2);});
+          {% endif %}
+
+          {% if filter.col_chart(i) == "pieChart" %}
+            chart_{{i}}.radius({{filter.col_radius(i)}}).innerRadius({{filter.col_inner_radius(i)}});
+          {% endif %}
+
+          $("#chart-{{i}}-{{filter.timestamp}} a.reset").click(function(){chart_{{i}}.filterAll();dc.redrawAll();return false});
+    {% endfor %}
+
+    dc.renderAll();
+
+    $("#crossfilter-update-{{filter.timestamp}}").click(function(){
+        var kernel = IPython.notebook.kernel;
+        var index = [];
+        dim_index.top(10000000).forEach(function(v){index.push(v["_I"]);});
+        var index_string = index.join(" ");
+        var code = "__nb_update__('{{in_name}}', '{{out_name}}', '" + index_string + "')";
+        console.log(code);
+        kernel.execute(code, {}, {silent:true});
+        IPython.notification_area.widget_dict["kernel"].set_message("Data saved to {{out_name}}", 1000);
+        return false;
+    });
+
+    $("#crossfilter-reset-{{filter.timestamp}}").click(function(){
+        dc.filterAll();
+        dc.renderAll();
+        return false;
+    });
+
+{%- endmacro %}
+
+{% for css in css_urls %}
+<link rel="stylesheet" type="text/css" href="{{ css }}">
+{% endfor %}
+
+<div>
+    <a href="#" id="crossfilter-reset-{{filter.timestamp}}">Reset All</a>
+    <a href="#" id="crossfilter-update-{{filter.timestamp}}">Save as {{out_name}}</a>
+</div>
+
+{% for i, col in filter.itercolumns() %}
+<div id="chart-{{i}}-{{filter.timestamp}}">
+    <strong>{{col}}</strong>
+    <span class="reset" style="display: none;">range: <span class="filter"></span></span>
+    <a class="reset" href="#" style="display: none;">reset</a>
+<div class="clearfix"></div>
+</div>
+{% endfor %}
+
+
+
+<script type="text/javascript">
+var df = {{filter.to_json()}};
+
+{% call require_js() %}
+    {{render_charts()}}
+{% endcall %}
+
+</script>
