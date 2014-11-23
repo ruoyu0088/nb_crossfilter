@@ -23,116 +23,145 @@ NOTEBOOK_URLS = {
     "css": "/nbextensions/dc.css"
 }
 
-def column_setting(func):
-    @wraps(func)
-    def f(self, col):
-        col_name = self.df.columns[col]
-        key_name = func.func_name[4:]
 
-        if col_name in self.settings:
-            col_settings = self.settings[col_name]
-            if key_name in col_settings:
-                return col_settings[key_name]
-        key = col_name, key_name
-        if key in self._col_cache:
-            return self._col_cache[key]
-        value = func(self, col)
-        self._col_cache[key] = value
-        return value
-    return f
+class DCChart(object):
+
+    def __init__(self, df, dim_column, group_column=None, **kw):
+        self.df = df
+        self._dim_column = dim_column
+        self._group_column = group_column if group_column is not None else dim_column
+        self.settings = kw
+
+    @property
+    def dtype(self):
+        return self.df[self.dim_column].dtype
+
+    @property
+    def is_number(self):
+        return issubclass(self.dtype.type, np.number)
+
+    @property
+    def is_datetime(self):
+        return self.dtype.name.startswith("datetime64")
+
+    @property
+    def dim_column(self):
+        return self._dim_column
+
+    @property
+    def group_column(self):
+        return self._group_column
+
+    @property
+    def json_dim_column(self):
+        index = self.df.columns.tolist().index(self.dim_column)
+        return "c{}".format(index)
+
+    @property
+    def width(self):
+        return self.settings.get("width", 300)
+
+    @property
+    def height(self):
+        return self.settings.get("height", 300)
+
+    @property
+    def title(self):
+        return self.settings.get("title", self.dim_column)
+
+    @property
+    def min(self):
+        return self.df[self.dim_column].min()
+
+    @property
+    def max(self):
+        return self.df[self.dim_column].max()
+
+
+class BarChart(DCChart):
+    type = "barChart"
+
+    @property
+    def scale(self):
+        return (self.max - self.min) / float(self.bins)
+
+    @property
+    def bins(self):
+        return self.settings.get("bins", 30)
+
+    @property
+    def dimension(self):
+        return 'return Math.floor((+d["{name}"] - {min})/{scale}) * {scale} + {min} + 0.5 * {scale}'.format(
+                    name=self.json_dim_column, scale=self.scale, min=self.min)
+
+
+class RowChart(DCChart):
+    type = "rowChart"
+
+    @property
+    def dimension(self):
+        dt = self.dt
+        if dt is not None:
+            if dt == "year":
+                expr = 'return d3.time.year(d["{name}"]).getFullYear()'
+            elif dt == "month":
+                expr = 'return d["{name}"].getMonth() + 1'
+            elif dt == "dayofweek":
+                expr = 'var day = d["{name}"].getDay();' \
+                       'var name=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];' \
+                        'return day+"."+name[day];'
+        elif self.is_number:
+            expr = 'return +d["{name}"]'
+        else:
+            expr = 'return d["{name}"]'
+        return expr.format(name=self.json_dim_column)
+
+    @property
+    def dt(self):
+        return self.settings.get("dt", None)
 
 
 class CrossFilter(object):
 
-    def __init__(self, df, settings=None, min_bin_count=30, width=300, height=300):
-        self.df = df
-        self.min_bin_count = min_bin_count
-        self.settings = {}
-        if settings is not None:
-            self.settings = settings
-        self._col_cache = {}
-        self.width = width
-        self.height = height
+    def __init__(self, df, columns=None, charts=None, **settings):
+        if columns is None:
+            columns = df.columns.tolist()
+        self.df = df[[col.split("@")[0] for col in columns]]
+
+        if charts is None:
+            self.charts = []
+
+            for column in columns:
+                col = column.split("@")[0]
+                if "@" in column:
+                    if self.df[col].dtype.name.startswith("datetime"):
+                        dt = column.split("@")[1]
+                    else:
+                        dt = None
+                    chart = RowChart(self.df, col, dt=dt, **settings)
+                else:
+                    chart = BarChart(self.df, col, **settings)
+                self.charts.append(chart)
+        else:
+            self.charts = charts
+
         now = datetime.now()
         self.timestamp = now.strftime("%y%m%d%H%M%S%f")
 
+    @property
+    def datetime_columns(self):
+        return ["c{}".format(i) for i, col in enumerate(self.df.columns)
+                if self.df[col].dtype.name.startswith("datetime")]
 
     def to_json(self):
         df = self.df.copy()
         df.columns = ["c{}".format(i) for i in range(self.df.shape[1])]
         df["_I"] = np.arange(df.shape[0])
-        return df.to_json(orient="records")
+        return df.to_json(orient="records", date_format="iso")
 
-    def itercolumns(self):
-        return enumerate(self.df.columns)
+    def enumerate_charts(self):
+        return enumerate(self.charts)
 
-    def dimension(self, col):
-        series = self.df.icol(col)
-        col_name = self.df.columns[col]
-        dtype = series.dtype
-        if issubclass(dtype.type, np.number):
-            value_count = self.col_value_count(col)
-            if value_count < self.min_bin_count:
-                return '+d["c{}"]'.format(col)
-            else:
-                return 'Math.floor((+d["c{name}"] - {min})/{scale}) * {scale} + {min} + 0.5 * {scale}'.format(
-                    name=col, scale=self.col_scale(col), min=self.col_min(col))
-        else:
-            return 'd["{}"]'.format(col_name)
-
-    def group(self, col):
-        pass
-
-    @column_setting
-    def col_value_count(self, col):
-        return self.df.icol(col).unique().shape[0]
-
-    @column_setting
-    def col_bin_count(self, col):
-        count = self.col_value_count(col)
-        return min(count, self.min_bin_count)
-
-    @column_setting
-    def col_min(self, col):
-        return self.df.icol(col).min()
-
-    @column_setting
-    def col_max(self, col):
-        return self.df.icol(col).max()
-
-    @column_setting
-    def col_scale(self, col):
-        scale = (self.col_max(col) - self.col_min(col)) / self.col_bin_count(col)
-        return scale #round(scale, int(2 - round(math.log10(scale))))
-
-    @column_setting
-    def col_width(self, col):
-        return self.width
-
-    @column_setting
-    def col_height(self, col):
-        return self.height
-
-    @column_setting
-    def col_radius(self, col):
-        return 0.5 * min(self.col_width(col), self.col_height(col))
-
-    @column_setting
-    def col_inner_radius(self, col):
-        return self.col_radius(col) * 0.7
-
-    @column_setting
-    def col_chart(self, col):
-        if self.col_value_count(col) < self.min_bin_count:
-            return "rowChart"
-        else:
-            return "barChart"
-
-
-settings = {
-    "quality":{"chart":"rowChart"},
-    "CRIM":{"width":600}
-}
 
 def nb_update(in_name, out_name, index):
     from IPython import display, get_ipython
@@ -141,6 +170,7 @@ def nb_update(in_name, out_name, index):
     index = sorted([int(idx) for idx in index.split()])
     out_df = in_df.iloc[index]
     shell.user_ns[out_name] = out_df
+
 
 def nb_crossfilter(in_name, out_name, **kw):
     from IPython import display, get_ipython
