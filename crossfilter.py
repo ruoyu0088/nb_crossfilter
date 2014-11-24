@@ -1,3 +1,4 @@
+import re
 from os import path
 from datetime import datetime
 import json
@@ -147,7 +148,7 @@ class RowChart(DCChart):
     @property
     def dimension(self):
         transform = self.get_setting("transform", None)
-        if transform is not None:
+        if transform != "":
             if transform == "year":
                 expr = 'return d3.time.year(d["{name}"]).getFullYear()'
             elif transform == "month":
@@ -181,8 +182,15 @@ class ChartCommandParser(object):
         self.chart_type = "|"
         self.dim_column = ""
         self.group_column = ""
-        self.dim_transform = None
+        self.dim_transform = ""
         self.group_reduce = "count"
+        self.settings = {}
+
+        if "{" in cmd:
+            idx = cmd.index("{")
+            data = re.sub(r"(\w+)\s*:", r'"\1":', cmd[idx:])
+            self.settings = json.loads(data)
+            cmd = cmd[:idx]
 
         if cmd[1] == ":":
             self.chart_type = cmd[0]
@@ -203,6 +211,11 @@ class ChartCommandParser(object):
             self.group_reduce = cmd[:idx]
             self.group_column = cmd[idx+1:-1]
 
+        self.dim_column = self.dim_column.strip()
+        self.group_column = self.group_column.strip()
+        self.group_reduce = self.group_reduce.strip()
+        self.dim_transform = self.dim_transform.strip()
+
 
 def create_chart(chart_cmd):
     chart_map = {
@@ -215,7 +228,7 @@ def create_chart(chart_cmd):
     klass = chart_map[parser.chart_type]
     chart = klass(parser.dim_column, parser.group_column,
                   transform=parser.dim_transform,
-                  reduce=parser.group_reduce)
+                  reduce=parser.group_reduce, **parser.settings)
     return chart
 
 
