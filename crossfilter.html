@@ -26,7 +26,7 @@ require(["d3", "crossfilter", "dc"], function(d3, ignore, dc) {
 
     {% for i, chart in filter.enumerate_charts() %}
     var dim_col{{i}} = ndx.dimension(function(d){ {{chart.dimension}}; });
-    var grp_col{{i}} = dim_col{{i}}.group().reduceCount();
+    var grp_col{{i}} = dim_col{{i}}.group().{{chart.reduce}};
     {% endfor %}
 
     {% for i, chart in filter.enumerate_charts() %}
@@ -34,6 +34,12 @@ require(["d3", "crossfilter", "dc"], function(d3, ignore, dc) {
             .width({{chart.width}}).height({{chart.height}})
             .dimension(dim_col{{i}})
             .group(grp_col{{i}});
+
+          {% if chart.reduce_method == "mean" %}
+            chart_{{i}}.valueAccessor(function (d) {
+                return d.value.sum / d.value.count;
+            });
+          {% endif %}
 
           {% if chart.type == "barChart" %}
             chart_{{i}}.xUnits(function(){return {{chart.bins + 2}};})
@@ -52,7 +58,7 @@ require(["d3", "crossfilter", "dc"], function(d3, ignore, dc) {
           {% endif %}
 
           {% if chart.type == "pieChart" %}
-            chart_{{i}}.radius({{filter.col_radius(i)}}).innerRadius({{filter.col_inner_radius(i)}});
+            chart_{{i}}.radius({{chart.radius}}).innerRadius({{chart.inner_radius}});
           {% endif %}
 
           $("#chart-{{i}}-{{filter.timestamp}} a.reset").click(function(){chart_{{i}}.filterAll();dc.redrawAll();return false});
